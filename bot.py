@@ -12,7 +12,6 @@ import pymupdf
 from docx import Document
 from docx.oxml.ns import qn
 from dotenv import load_dotenv
-from pdf2docx import Converter
 from PIL import Image, ImageOps
 from pypdf import PdfWriter
 from telegram import (
@@ -49,7 +48,7 @@ AUTO_DELAY = 2.5  # seconds of silence after an album before auto-creating the P
 PAGE_DPI = 200  # quality of generated PDF pages (A4 at 200 dpi)
 DEFAULT_MARGIN_MM = 5  # white border around images in the PDF (change in ⚙️ settings)
 KHMER_FONT = os.environ.get("KHMER_FONT", "Khmer OS Siemreap")
-TASKS: set = set()  # keep references to background tasks
+TASKS = set()  # keep references to background tasks
 
 IMAGE_EXT = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif", ".tif", ".tiff"}
 WORD_EXT = {".doc", ".docx", ".odt", ".rtf"}
@@ -116,7 +115,7 @@ class UserError(Exception):
 
 # ---------- keyboards & texts ----------
 
-def main_menu() -> Markup:
+def main_menu():
     def b(m):
         return Btn(TOOLS[m], callback_data=f"mode:{m}")
 
@@ -133,11 +132,11 @@ def main_menu() -> Markup:
     )
 
 
-def back_kb() -> Markup:
+def back_kb():
     return Markup([[Btn("⬅️ ត្រឡប់ក្រោយ", callback_data="menu")]])
 
 
-def collect_kb(n: int) -> Markup:
+def collect_kb(n: int):
     if n == 0:
         return back_kb()
     return Markup(
@@ -151,7 +150,7 @@ def collect_kb(n: int) -> Markup:
     )
 
 
-def collect_text(mode: str, n: int) -> str:
+def collect_text(mode: str, n: int):
     title = f"<b>{TOOLS[mode]}</b>"
     noun = "រូបភាព" if mode == "img2pdf" else "PDF"
     if n == 0:
@@ -165,13 +164,13 @@ def collect_text(mode: str, n: int) -> str:
     )
 
 
-def intro_text(mode: str) -> str:
+def intro_text(mode: str):
     if mode in MULTI:
         return collect_text(mode, 0)
     return f"<b>{TOOLS[mode]}</b>\n\n{INTRO[mode]}"
 
 
-def pdf_choice_kb(encrypted: bool) -> Markup:
+def pdf_choice_kb(encrypted: bool):
     if encrypted:
         return Markup(
             [
@@ -194,7 +193,7 @@ def pdf_choice_kb(encrypted: bool) -> Markup:
     )
 
 
-def settings_view(cfg: dict) -> tuple[str, Markup]:
+def settings_view(cfg: dict):
     page_name = "A4" if cfg["page"] == "a4" else "តាមទំហំរូប"
     text = (
         "⚙️ <b>ការកំណត់ «JPG → PDF»</b>\n\n"
@@ -202,7 +201,7 @@ def settings_view(cfg: dict) -> tuple[str, Markup]:
         f"🔲 គែមសជុំវិញរូប: <b>{cfg['margin']} មម</b>"
     )
 
-    def t(ok: bool) -> str:
+    def t(ok: bool):
         return "✅ " if ok else ""
 
     kb = Markup(
@@ -222,13 +221,13 @@ def settings_view(cfg: dict) -> tuple[str, Markup]:
     return text, kb
 
 
-def fmt_size(n: int) -> str:
+def fmt_size(n: int):
     return f"{n / 1024:.0f} KB" if n < 1024 * 1024 else f"{n / 1024 / 1024:.1f} MB"
 
 
 # ---------- per-user state ----------
 
-def state(ctx: ContextTypes.DEFAULT_TYPE) -> dict:
+def state(ctx):
     return ctx.user_data.setdefault(
         "s",
         {
@@ -245,18 +244,18 @@ def state(ctx: ContextTypes.DEFAULT_TYPE) -> dict:
     )
 
 
-def cfg_of(ctx: ContextTypes.DEFAULT_TYPE) -> dict:
+def cfg_of(ctx):
     return ctx.user_data.setdefault("cfg", {"margin": DEFAULT_MARGIN_MM, "page": "a4"})
 
 
-def reset(ctx: ContextTypes.DEFAULT_TYPE):
+def reset(ctx):
     s = state(ctx)
     s["seq"] += 1
     s.update(mode=None, files=[], status_id=None, pdf=None, name=None, info=None)
     s["await"] = None
 
 
-async def safe_edit(q, text: str, kb: Markup | None = None):
+async def safe_edit(q, text: str, kb=None):
     try:
         await q.edit_message_text(text, reply_markup=kb, parse_mode=HTML)
     except TelegramError:
@@ -294,7 +293,7 @@ def enforce_khmer_docx_fonts(docx_path: Path, font_name: str = KHMER_FONT):
     doc.save(str(docx_path))
 
 
-def find_soffice() -> str:
+def find_soffice():
     """ស្វែងរក LibreOffice ទាំងលើ macOS, Linux និង Windows"""
     for cmd in ("soffice", "libreoffice"):
         path = shutil.which(cmd)
@@ -316,11 +315,11 @@ def find_soffice() -> str:
 
 # ---------- PDF / image / Word processing (CPU work, run in threads) ----------
 
-def mm(v: float) -> int:
+def mm(v: float):
     return round(v / 25.4 * PAGE_DPI)
 
 
-def to_rgb(data: bytes) -> Image.Image:
+def to_rgb(data: bytes):
     img = ImageOps.exif_transpose(Image.open(io.BytesIO(data)))
     if img.mode in ("RGBA", "LA", "P"):
         img = img.convert("RGBA")
@@ -330,7 +329,7 @@ def to_rgb(data: bytes) -> Image.Image:
     return img.convert("RGB")
 
 
-def to_page(img: Image.Image, margin_mm: float, page: str) -> Image.Image:
+def to_page(img, margin_mm: float, page: str):
     m = mm(margin_mm)
     if page == "fit":
         scale = min(1.0, mm(297) / max(img.size))
@@ -352,7 +351,7 @@ def to_page(img: Image.Image, margin_mm: float, page: str) -> Image.Image:
     return canvas
 
 
-def build_pdf(mode: str, files: list[bytes], cfg: dict) -> tuple[bytes, str, int]:
+def build_pdf(mode: str, files, cfg: dict):
     w = PdfWriter()
     if mode == "img2pdf":
         for b in files:
@@ -371,7 +370,7 @@ def build_pdf(mode: str, files: list[bytes], cfg: dict) -> tuple[bytes, str, int
     return out.getvalue(), name, len(w.pages)
 
 
-def pdf_info(data: bytes) -> tuple[int, bool]:
+def pdf_info(data: bytes):
     doc = pymupdf.open(stream=data, filetype="pdf")
     try:
         if doc.needs_pass:
@@ -381,8 +380,8 @@ def pdf_info(data: bytes) -> tuple[int, bool]:
         doc.close()
 
 
-def parse_pages(spec: str, total: int) -> list[int]:
-    idx: list[int] = []
+def parse_pages(spec: str, total: int):
+    idx = []
     for part in re.split(r"[,\s;]+", spec.strip()):
         if not part:
             continue
@@ -445,12 +444,15 @@ def op_word2pdf(data: bytes, ext: str, base: str):
 
 
 def op_pdf2word(data: bytes, _arg, base: str):
+    """បំប្លែង PDF → Word ដោយប្រើ LibreOffice ដើម្បីរក្សាទម្រង់អក្សរខ្មែរ"""
+    soffice = find_soffice()
     with tempfile.TemporaryDirectory() as tmp:
         tmp_dir = Path(tmp)
         in_pdf = tmp_dir / "input.pdf"
-        out_docx = tmp_dir / "output.docx"
+        out_docx = tmp_dir / "input.docx"
         in_pdf.write_bytes(data)
 
+        # ឆែកមើលចំនួនទំព័រ
         doc = pymupdf.open(stream=data, filetype="pdf")
         try:
             total = doc.page_count
@@ -458,19 +460,30 @@ def op_pdf2word(data: bytes, _arg, base: str):
         finally:
             doc.close()
 
-        cv = Converter(str(in_pdf))
-        try:
-            cv.convert(str(out_docx))
-        finally:
-            cv.close()
+        profile_uri = (tmp_dir / "profile").as_uri()
+        cmd = [
+            soffice,
+            f"-env:UserInstallation={profile_uri}",
+            "--headless",
+            "--invisible",
+            "--nocrashreport",
+            "--nodefault",
+            "--nofirststartwizard",
+            "--nolockcheck",
+            "--nologo",
+            "--norestore",
+            "--infilter=writer_pdf_import",
+            "--convert-to",
+            "docx",
+            "--outdir",
+            str(tmp_dir),
+            str(in_pdf),
+        ]
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
 
-        if not out_docx.exists():
-            raise UserError("មិនអាចបំប្លែង PDF នេះទៅជា Word បានទេ")
-
-        try:
-            enforce_khmer_docx_fonts(out_docx, KHMER_FONT)
-        except Exception:
-            log.warning("Could not enforce Khmer font on docx", exc_info=True)
+        if res.returncode != 0 or not out_docx.exists():
+            log.error("LibreOffice pdf2word failed: %s %s", res.stdout, res.stderr)
+            raise UserError("មិនអាចបំប្លែង PDF នេះទៅជា Word បានទេ (ឯកសារអាចខូច)")
 
         docx_bytes = out_docx.read_bytes()
         note = "" if has_text else "\n⚠️ សម្គាល់៖ PDF នេះជាប្រភេទរូបភាពស្កេន (គ្មានអក្សរកូដទេ)"
@@ -605,7 +618,7 @@ OPS = {
 
 # ---------- sending results ----------
 
-async def send_files(chat_id: int, ctx: ContextTypes.DEFAULT_TYPE, files, info: str):
+async def send_files(chat_id: int, ctx, files, info: str):
     bot = ctx.bot
     caption = "✅ <b>រួចរាល់!</b>" + (f"\n{info}" if info else "")
     if len(files) == 1:
@@ -615,7 +628,7 @@ async def send_files(chat_id: int, ctx: ContextTypes.DEFAULT_TYPE, files, info: 
         )
         return
     for start in range(0, len(files), 10):
-        chunk = files[start : start + 10]
+        chunk = files[start: start + 10]
         await bot.send_chat_action(chat_id, ChatAction.UPLOAD_DOCUMENT)
         if len(chunk) == 1:
             name, data = chunk[0]
@@ -639,20 +652,20 @@ async def send_files(chat_id: int, ctx: ContextTypes.DEFAULT_TYPE, files, info: 
             await bot.send_media_group(chat_id, media)
 
 
-async def send_menu(chat_id: int, ctx: ContextTypes.DEFAULT_TYPE):
+async def send_menu(chat_id: int, ctx):
     await ctx.bot.send_message(
         chat_id, "ចង់បន្តធ្វើអ្វីទៀតទេ? 👇", reply_markup=main_menu()
     )
 
 
-async def run_op(chat_id: int, ctx: ContextTypes.DEFAULT_TYPE, op: str, arg=None):
+async def run_op(chat_id: int, ctx, op: str, arg=None):
     s = state(ctx)
     bot = ctx.bot
     data, base = s["pdf"], s["name"] or "document"
     wait = await bot.send_message(chat_id, "⏳ កំពុងដំណើរការ...")
     await bot.send_chat_action(chat_id, ChatAction.UPLOAD_DOCUMENT)
     try:
-        files, info = await asyncio.to_thread(OPS[op], data, arg, base)
+        files, info = await asyncio.get_event_loop().run_in_executor(None, OPS[op], data, arg, base)
     except UserError as e:
         await wait.edit_text(f"⚠️ {e}")
         return
@@ -672,7 +685,7 @@ async def run_op(chat_id: int, ctx: ContextTypes.DEFAULT_TYPE, op: str, arg=None
 
 # ---------- status message for multi-file jobs (debounced) ----------
 
-async def refresh_status(chat_id: int, ctx: ContextTypes.DEFAULT_TYPE):
+async def refresh_status(chat_id: int, ctx):
     s = state(ctx)
     async with s["lock"]:
         if s["mode"] not in MULTI or not s["files"]:
@@ -693,7 +706,7 @@ async def refresh_status(chat_id: int, ctx: ContextTypes.DEFAULT_TYPE):
         s["status_id"] = m.message_id
 
 
-async def _later(chat_id: int, ctx: ContextTypes.DEFAULT_TYPE, my_seq: int, auto: bool):
+async def _later(chat_id: int, ctx, my_seq: int, auto: bool):
     await asyncio.sleep(AUTO_DELAY if auto else 1.0)
     if state(ctx)["seq"] != my_seq:
         return
@@ -706,7 +719,7 @@ async def _later(chat_id: int, ctx: ContextTypes.DEFAULT_TYPE, my_seq: int, auto
         log.exception("delayed action failed")
 
 
-def schedule(chat_id: int, ctx: ContextTypes.DEFAULT_TYPE, auto: bool):
+def schedule(chat_id: int, ctx, auto: bool):
     s = state(ctx)
     s["seq"] += 1
     t = asyncio.create_task(_later(chat_id, ctx, s["seq"], auto))
@@ -714,7 +727,7 @@ def schedule(chat_id: int, ctx: ContextTypes.DEFAULT_TYPE, auto: bool):
     t.add_done_callback(TASKS.discard)
 
 
-async def run_done(chat_id: int, ctx: ContextTypes.DEFAULT_TYPE, silent: bool = False):
+async def run_done(chat_id: int, ctx, silent: bool = False):
     s = state(ctx)
     bot = ctx.bot
     async with s["lock"]:
@@ -743,7 +756,8 @@ async def run_done(chat_id: int, ctx: ContextTypes.DEFAULT_TYPE, silent: bool = 
         )
         await bot.send_chat_action(chat_id, ChatAction.UPLOAD_DOCUMENT)
         try:
-            out, name, pages = await asyncio.to_thread(build_pdf, mode, files, dict(cfg_of(ctx)))
+            out, name, pages = await asyncio.get_event_loop().run_in_executor(None, build_pdf, mode, files,
+                                                                              dict(cfg_of(ctx)))
         except Exception:
             log.exception("build_pdf failed")
             s["mode"] = None
@@ -764,7 +778,7 @@ async def run_done(chat_id: int, ctx: ContextTypes.DEFAULT_TYPE, silent: bool = 
 
 # ---------- flow after a single PDF is received ----------
 
-async def after_pdf(chat_id: int, ctx: ContextTypes.DEFAULT_TYPE):
+async def after_pdf(chat_id: int, ctx):
     s = state(ctx)
     bot = ctx.bot
     mode = s["mode"]
@@ -839,7 +853,7 @@ async def after_pdf(chat_id: int, ctx: ContextTypes.DEFAULT_TYPE):
         await bot.send_message(chat_id, text, reply_markup=back_kb(), parse_mode=HTML)
 
 
-async def pdf_choice(chat_id: int, ctx: ContextTypes.DEFAULT_TYPE):
+async def pdf_choice(chat_id: int, ctx):
     s = state(ctx)
     pages, encrypted = s["info"]
     size = fmt_size(len(s["pdf"]))
@@ -858,31 +872,31 @@ async def pdf_choice(chat_id: int, ctx: ContextTypes.DEFAULT_TYPE):
 
 # ---------- handlers ----------
 
-async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+async def start(update: Update, ctx):
     reset(ctx)
     await update.message.reply_text(WELCOME, reply_markup=main_menu(), parse_mode=HTML)
 
 
-async def help_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+async def help_cmd(update: Update, ctx):
     await update.message.reply_text(HELP, reply_markup=back_kb(), parse_mode=HTML)
 
 
-async def settings_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+async def settings_cmd(update: Update, ctx):
     text, kb = settings_view(cfg_of(ctx))
     await update.message.reply_text(text, reply_markup=kb, parse_mode=HTML)
 
 
-async def done_cmd(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+async def done_cmd(update: Update, ctx):
     await run_done(update.effective_chat.id, ctx)
 
 
-async def restart_hint(chat_id: int, ctx: ContextTypes.DEFAULT_TYPE):
+async def restart_hint(chat_id: int, ctx):
     await ctx.bot.send_message(
         chat_id, "⚠️ សូមជ្រើសរើសឧបករណ៍ ហើយផ្ញើឯកសារម្តងទៀត 👇", reply_markup=main_menu()
     )
 
 
-async def on_button(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+async def on_button(update: Update, ctx):
     q = update.callback_query
     await q.answer()
     chat_id = q.message.chat_id
@@ -946,7 +960,7 @@ async def on_button(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             await run_op(chat_id, ctx, "rotate", data.split(":")[1])
 
 
-async def on_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+async def on_text(update: Update, ctx):
     s = state(ctx)
     msg = update.message
     chat_id = msg.chat_id
@@ -964,7 +978,7 @@ async def on_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await msg.reply_text("សូមជ្រើសរើសឧបករណ៍ពីម៉ឺនុយខាងក្រោម 👇", reply_markup=main_menu())
 
 
-def classify(msg) -> tuple[str | None, object, str | None]:
+def classify(msg):
     """Return (kind, telegram_file_holder, original_filename)."""
     if msg.photo:
         return "image", msg.photo[-1], None
@@ -980,7 +994,7 @@ def classify(msg) -> tuple[str | None, object, str | None]:
     return None, doc, doc.file_name
 
 
-async def on_file(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+async def on_file(update: Update, ctx):
     s = state(ctx)
     msg = update.message
     chat_id = msg.chat_id
@@ -1030,7 +1044,7 @@ async def on_file(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             return
         if mode == "merge":
             try:
-                _, encrypted = await asyncio.to_thread(pdf_info, data)
+                _, encrypted = await asyncio.get_event_loop().run_in_executor(None, pdf_info, data)
             except Exception:
                 await msg.reply_text("⚠️ ឯកសារ PDF នេះខូច មិនអាចបញ្ចូលគ្នាបានទេ")
                 return
@@ -1043,7 +1057,7 @@ async def on_file(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
 
     try:
-        s["info"] = await asyncio.to_thread(pdf_info, data)
+        s["info"] = await asyncio.get_event_loop().run_in_executor(None, pdf_info, data)
     except Exception:
         log.exception("cannot read pdf")
         await msg.reply_text("⚠️ មិនអាចអានឯកសារ PDF នេះបានទេ (ឯកសារអាចខូច)")
@@ -1057,7 +1071,7 @@ async def on_file(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await after_pdf(chat_id, ctx)
 
 
-async def on_error(update: object, ctx: ContextTypes.DEFAULT_TYPE):
+async def on_error(update: object, ctx):
     log.error("Unhandled error", ctx.error)
 
 
