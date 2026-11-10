@@ -47,7 +47,7 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 log = logging.getLogger("converter")
 
 HTML = ParseMode.HTML
-MAX_SIZE = 20 * 1024 * 1024  # Telegram bot download limit
+MAX_SIZE = 20 * 1024 * 1024  # Telegram bot download limit (20MB)
 MAX_PAGES = 30  # max pages sent back for PDF -> JPG / split-all
 MAX_FILES = 50  # files collected per job
 AUTO_DELAY = 2.5  # seconds of silence after an album before auto-creating the PDF
@@ -332,7 +332,8 @@ def ocr_pdf_to_docx(data: bytes, out_path: Path):
                 word.add_page_break()
             img = Image.open(io.BytesIO(page.get_pixmap(dpi=300).tobytes("png")))
             try:
-                text = pytesseract.image_to_string(img, lang=OCR_LANG)
+                custom_config = r'--oem 1 --psm 6'
+                text = pytesseract.image_to_string(img, lang=OCR_LANG, config=custom_config)
             except pytesseract.TesseractError as e:
                 log.error("tesseract failed: %s", e)
                 raise UserError(
@@ -397,6 +398,7 @@ def to_page(img: Image.Image, margin_mm: float, page: str) -> Image.Image:
     if img.width > img.height:
         pw, ph = ph, pw
     scale = min((pw - 2 * m) / img.width, (ph - 2 * m) / img.height)
+
     size = (max(1, round(img.width * scale)), max(1, round(img.height * scale)))
     canvas = Image.new("RGB", (pw, ph), "white")
     canvas.paste(img.resize(size, Image.LANCZOS), ((pw - size[0]) // 2, (ph - size[1]) // 2))
