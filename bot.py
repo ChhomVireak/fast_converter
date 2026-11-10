@@ -33,10 +33,13 @@ from telegram.ext import (
     filters,
 )
 
+# ប្រើ EasyOCR ស្កែនអក្សរខ្មែរ និងអង់គ្លេសសម្រាប់ PDF Scan
 try:
-    import pytesseract
-except ImportError:  # OCR is optional
-    pytesseract = None
+    import easyocr
+
+    reader = easyocr.Reader(["km", "en"], gpu=False)
+except ImportError:
+    reader = None
 
 load_dotenv()
 logging.basicConfig(
@@ -53,8 +56,6 @@ MAX_FILES = 50  # files collected per job
 AUTO_DELAY = 2.5  # seconds of silence after an album before auto-creating the PDF
 PAGE_DPI = 200  # quality of generated PDF pages (A4 at 200 dpi)
 DEFAULT_MARGIN_MM = 5  # white border around images in the PDF (change in ⚙️ settings)
-KHMER_FONT = os.environ.get("KHMER_FONT", "Khmer OS Siemreap")
-OCR_LANG = os.environ.get("OCR_LANG", "khm+eng")
 OCR_MAX_PAGES = 30  # OCR is slow, limit pages
 TASKS: set = set()  # keep references to background tasks
 
@@ -84,8 +85,8 @@ TOOLS = {
 MULTI = ("img2pdf", "merge")  # modes that collect several files
 INTRO = {
     "pdf2img": f"ផ្ញើឯកសារ PDF មក 📤\nខ្ញុំនឹងបំប្លែងគ្រប់ទំព័រជារូប JPG (អតិបរមា {MAX_PAGES} ទំព័រ)",
-    "word2pdf": "ផ្ញើឯកសារ Word (.docx / .doc) មក 📤\nខ្ញុំនឹងបំប្លែងជា PDF ដោយរក្សាទម្រង់អក្សរខ្មែរនៅដដែល",
-    "pdf2word": "ផ្ញើឯកសារ PDF មក 📤\nខ្ញុំនឹងបំប្លែងជាឯកសារ Word (.docx) គាំទ្រអក្សរខ្មែរ",
+    "word2pdf": "ផ្ញើឯកសារ Word (.docx / .doc) មក 📤\nខ្ញុំនឹងបំប្លែងជា PDF ដោយរក្សាទម្រង់អក្សរ និង Font ដើមនៅដដែល",
+    "pdf2word": "ផ្ញើឯកសារ PDF មក 📤\nខ្ញុំនឹងបំប្លែងជាឯកសារ Word (.docx) ដោយរក្សា Font ដើម",
     "split": "ផ្ញើឯកសារ PDF ដែលចង់បំបែក 📤",
     "compress": "ផ្ញើឯកសារ PDF ដែលចង់បង្រួមទំហំ 📤",
     "rotate": "ផ្ញើឯកសារ PDF ដែលចង់បង្វិល 📤",
@@ -97,15 +98,15 @@ LEVELS = {"high": (150, 80), "mid": (110, 65), "low": (72, 50)}  # (dpi, jpeg qu
 
 WELCOME = (
     "✨ <b>Fast Convert</b> ✨\n"
-    "ឧបករណ៍បំប្លែង និងកែសម្រួលឯកសារ PDF / Word ឆាប់រហ័ស (គាំទ្រអក្សរខ្មែរ 🇰🇭)\n\n"
+    "ឧបករណ៍បំប្លែង និងកែសម្រួលឯកសារ PDF / Word ឆាប់រហ័ស (រក្សា Font ដើម 🇰🇭)\n\n"
     "💡 ផ្ញើរូបភាព, Word ឬ PDF មកផ្ទាល់ក៏បាន ឬជ្រើសរើសឧបករណ៍ខាងក្រោម 👇"
 )
 HELP = (
     "ℹ️ <b>របៀបប្រើ</b>\n\n"
     "🖼 <b>JPG → PDF</b>: ផ្ញើរូបច្រើនក្នុងពេលតែមួយ ខ្ញុំបង្កើត PDF ឱ្យដោយស្វ័យប្រវត្តិ\n"
     "📄 <b>PDF → JPG</b>: បំប្លែងទំព័រនីមួយៗជារូបភាព\n"
-    "📘 <b>Word → PDF</b>: បំប្លែងឯកសារ Word (.doc/.docx) ទៅជា PDF (គាំទ្រអក្សរខ្មែរ)\n"
-    "📝 <b>PDF → Word</b>: បំប្លែងឯកសារ PDF ទៅជា Word (.docx) អាចកែអក្សរខ្មែរបាន\n"
+    "📘 <b>Word → PDF</b>: បំប្លែងឯកសារ Word (.doc/.docx) ទៅជា PDF (រក្សា Font ដើម)\n"
+    "📝 <b>PDF → Word</b>: បំប្លែងឯកសារ PDF ទៅជា Word (.docx) អាចកែអក្សរបាន\n"
     "📎 <b>បញ្ចូល PDF</b>: ផ្ញើ PDF ច្រើនតាមលំដាប់\n"
     "✂️ <b>បំបែក PDF</b>: ទាញយកទំព័រដែលចង់បាន (ឧ. 1-3,5)\n"
     "🗜 <b>បង្រួម PDF</b>: បន្ថយទំហំឯកសារ\n"
@@ -272,55 +273,21 @@ async def safe_edit(q, text: str, kb: Markup | None = None):
 
 # ---------- Khmer & Word/PDF helpers ----------
 
-_KHMER_RE = re.compile(r"[\u1780-\u17FF\u19E0-\u19FF]")
-
-
-def _apply_khmer_font_to_runs(paragraphs, font_name: str):
-    for p in paragraphs:
-        for run in p.runs:
-            if run.text and _KHMER_RE.search(run.text):
-                run.font.name = font_name
-                rPr = run._element.get_or_add_rPr()
-                rFonts = rPr.get_or_add_rFonts()
-                rFonts.set(qn("w:ascii"), font_name)
-                rFonts.set(qn("w:hAnsi"), font_name)
-                rFonts.set(qn("w:cs"), font_name)
-                rFonts.set(qn("w:eastAsia"), font_name)
-                # complex-script font size must match the normal size
-                sz = rPr.find(qn("w:sz"))
-                if sz is not None and rPr.find(qn("w:szCs")) is None:
-                    szCs = rPr.makeelement(qn("w:szCs"), {qn("w:val"): sz.get(qn("w:val"))})
-                    rPr.append(szCs)
-
-
-def enforce_khmer_docx_fonts(docx_path: Path, font_name: str = KHMER_FONT):
-    doc = Document(str(docx_path))
-    _apply_khmer_font_to_runs(doc.paragraphs, font_name)
-    for table in doc.tables:
-        for row in table.rows:
-            for cell in row.cells:
-                _apply_khmer_font_to_runs(cell.paragraphs, font_name)
-    for section in doc.sections:
-        _apply_khmer_font_to_runs(section.header.paragraphs, font_name)
-        _apply_khmer_font_to_runs(section.footer.paragraphs, font_name)
-    doc.save(str(docx_path))
-
-
 def khmer_text_broken(text: str) -> bool:
     """ទាយថាអក្សរខ្មែរដែលទាញបានខូច ឬអត់ (ឬ PDF ជារូបស្កេន)"""
     if not text.strip() or "\ufffd" in text:
         return True
     bad = (
-        len(re.findall(r"\u17D2(?![\u1780-\u17A2])", text))  # ជើង ្ មិនមានព្យញ្ជនៈតាម
-        + len(re.findall(r"(?:^|\s)[\u17B6-\u17C5]", text))  # ស្រៈនៅដើមពាក្យ
+            len(re.findall(r"\u17D2(?![\u1780-\u17A2])", text))  # ជើង ្ មិនមានព្យញ្ជនៈតាម
+            + len(re.findall(r"(?:^|\s)[\u17B6-\u17C5]", text))  # ស្រៈនៅដើមពាក្យ
     )
     return bad >= 3
 
 
 def ocr_pdf_to_docx(data: bytes, out_path: Path):
-    if pytesseract is None:
+    if reader is None:
         raise UserError(
-            "PDF នេះមានអក្សរខ្មែរដែលទាញមិនបាន ហើយម៉ាស៊ីនមេមិនទាន់ដំឡើង OCR (pytesseract) ទេ"
+            "PDF នេះត្រូវការ OCR ហើយម៉ាស៊ីនមេមិនទាន់ដំឡើង EasyOCR ទេ (សូម Run: pip install easyocr)"
         )
     doc = pymupdf.open(stream=data, filetype="pdf")
     word = Document()
@@ -330,16 +297,13 @@ def ocr_pdf_to_docx(data: bytes, out_path: Path):
                 break
             if i:
                 word.add_page_break()
-            img = Image.open(io.BytesIO(page.get_pixmap(dpi=300).tobytes("png")))
-            try:
-                custom_config = r'--oem 1 --psm 6'
-                text = pytesseract.image_to_string(img, lang=OCR_LANG, config=custom_config)
-            except pytesseract.TesseractError as e:
-                log.error("tesseract failed: %s", e)
-                raise UserError(
-                    "OCR មិនដំណើរការ៖ សូមដំឡើងទិន្នន័យភាសាខ្មែរ (tesseract-ocr-khm)"
-                )
-            for line in text.splitlines():
+
+            # បំប្លែងទំព័រ PDF ជារូបភាព PNG
+            img_bytes = page.get_pixmap(dpi=300).tobytes("png")
+
+            # ប្រើ EasyOCR ស្កែនអក្សរខ្មែរ
+            lines = reader.readtext(img_bytes, detail=0)
+            for line in lines:
                 word.add_paragraph(line)
     finally:
         doc.close()
@@ -457,7 +421,7 @@ def parse_pages(spec: str, total: int) -> list[int]:
 # Each op: (file_bytes, arg, base_name) -> ([(filename, bytes)], info_text)
 
 def op_word2pdf(data: bytes, ext: str, base: str):
-    """បំប្លែង Word → PDF ស្ងាត់ៗពីខាងក្រោយ (Headless 100% មិនលោតផ្ទាំងកម្មវិធី)"""
+    """បំប្លែង Word → PDF រក្សា Font ដើម ១០០%"""
     soffice = find_soffice()
     suffix = ext if ext in WORD_EXT else ".docx"
     with tempfile.TemporaryDirectory() as tmp:
@@ -498,6 +462,7 @@ def op_word2pdf(data: bytes, ext: str, base: str):
 
 
 def op_pdf2word(data: bytes, _arg, base: str):
+    """បំប្លែង PDF → Word ដោយទាញយក Font និង Structure ដើមមកប្រើប្រាស់ (មិនសង្កត់ Font ផ្សេង)"""
     with tempfile.TemporaryDirectory() as tmp:
         tmp_dir = Path(tmp)
         in_pdf = tmp_dir / "input.pdf"
@@ -513,7 +478,7 @@ def op_pdf2word(data: bytes, _arg, base: str):
 
         used_ocr = False
         if khmer_text_broken(sample):
-            # អក្សរក្នុង PDF ខូច ឬជាប្រភេទស្កេន → OCR
+            # អក្សរក្នុង PDF ខូច ឬជាប្រភេទស្កេន → EasyOCR
             ocr_pdf_to_docx(data, out_docx)
             used_ocr = True
         else:
@@ -526,14 +491,9 @@ def op_pdf2word(data: bytes, _arg, base: str):
         if not out_docx.exists():
             raise UserError("មិនអាចបំប្លែង PDF នេះទៅជា Word បានទេ")
 
-        try:
-            enforce_khmer_docx_fonts(out_docx, KHMER_FONT)
-        except Exception:
-            log.warning("Could not enforce Khmer font on docx", exc_info=True)
-
         docx_bytes = out_docx.read_bytes()
         note = (
-            "\n⚠️ ប្រើ OCR ព្រោះអក្សរក្នុង PDF មិនអាចទាញបានត្រឹមត្រូវ (សូមពិនិត្យមើលម្តងទៀត)"
+            "\n⚠️ ប្រើ EasyOCR ស្កែនអក្សរ"
             if used_ocr
             else ""
         )
@@ -678,7 +638,7 @@ async def send_files(chat_id: int, ctx: ContextTypes.DEFAULT_TYPE, files, info: 
         )
         return
     for start in range(0, len(files), 10):
-        chunk = files[start : start + 10]
+        chunk = files[start: start + 10]
         await bot.send_chat_action(chat_id, ChatAction.UPLOAD_DOCUMENT)
         if len(chunk) == 1:
             name, data = chunk[0]
