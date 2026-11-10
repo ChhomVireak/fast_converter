@@ -1,0 +1,17 @@
+<component name="InspectionProjectProfileManager">
+  <profile version="1.0">
+    <option name="myName" value="Project Default" />
+    <inspection_tool class="PyPackageRequirementsInspection" enabled="true" level="WARNING" enabled_by_default="true">
+      <option name="ignoredPackages">
+        <list>
+          <option value="djangorestframework" />
+          <option value="djangorestframework-simplejwt" />
+          <option value="argon2-cffi" />
+          <option value="whitenoise" />
+          <option value="gunicorn" />
+          <option value="psycopg2-binary" />
+        </list>
+      </option>
+    </inspection_tool>
+  </profile>
+</component>

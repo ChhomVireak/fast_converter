@@ -1,0 +1,7 @@
+python-telegram-bot==21.6
+Pillow
+PyMuPDF
+pypdf
+python-dotenv
+pdf2docx
+python-docx
